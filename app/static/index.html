@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SignalDesk</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body>
+  <main class="shell">
+    <header class="topbar"><div class="brand"><span class="mark">SD</span><div><strong>SignalDesk</strong><small>AI execution console</small></div></div><div class="status-pill"><i id="status-dot"></i><span id="mode-label">PAPER MODE</span></div></header>
+    <section class="hero"><div><p class="eyebrow">TRADING OPERATIONS / INDIA</p><h1>Make every signal<br><em>accountable.</em></h1><p class="lede">A focused command center for AI-assisted market decisions, with every quote, decision and order captured.</p></div><div class="hero-art"><div class="orbit"></div><span>FYERS<br><b>CONNECTED</b></span></div></section>
+    <section class="controls"><div><span class="eyebrow">BOT CONTROL</span><h2 id="bot-state">Bot is paused</h2><p id="last-cycle">Waiting for a cycle</p></div><div class="actions"><button class="button primary" id="start">Start bot</button><button class="button quiet" id="stop">Pause</button><button class="button quiet" id="cycle">Run cycle</button></div></section>
+    <section class="grid"><article class="panel trades"><div class="panel-head"><div><span class="eyebrow">EXECUTION LOG</span><h2>Recent trades</h2></div><span class="count" id="trade-count">0</span></div><div class="table-wrap"><table><thead><tr><th>Instrument</th><th>Side</th><th>Qty</th><th>Price</th><th>Source</th><th>Time</th></tr></thead><tbody id="trades"></tbody></table></div></article><article class="panel feed"><div class="panel-head"><div><span class="eyebrow">DECISION STREAM</span><h2>Live activity</h2></div><span class="pulse"></span></div><div id="events"></div></article></section>
+    <footer><span>SignalDesk / local workspace</span><span>Live execution is disabled unless <code>TRADING_MODE=live</code></span></footer>
+  </main><script src="/static/app.js"></script>
+</body></html>

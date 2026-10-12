@@ -1,0 +1,7 @@
+node_modules/
+trader.db
+trader.db-shm
+trader.db-wal
+.env
+.venv/
+__pycache__/
