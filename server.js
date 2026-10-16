@@ -12,15 +12,20 @@ const app = express();
 const port = Number(process.env.PORT || 8000);
 const settings = {
   mode: process.env.TRADING_MODE || 'paper',
-  symbols: (process.env.BOT_SYMBOLS || 'NSE:SBIN-EQ,NSE:RELIANCE-EQ').split(',').map((s) => s.trim()).filter(Boolean),
+  symbols: (process.env.BOT_SYMBOLS || 'SBIN.NS,RELIANCE.NS').split(',').map((s) => s.trim()).filter(Boolean),
   provider: process.env.AI_PROVIDER || 'mock',
+  marketDataMode: process.env.MARKET_DATA_MODE || 'yahoo',
   apiKey: process.env.AI_API_KEY || '',
   baseUrl: process.env.AI_BASE_URL || 'https://api.openai.com/v1',
   model: process.env.AI_MODEL || 'gpt-4o-mini',
   minConfidence: Number(process.env.AI_MIN_CONFIDENCE || 0.7),
   pollSeconds: Number(process.env.BOT_POLL_SECONDS || 60),
-  clientId: process.env.FYERS_CLIENT_ID || '',
-  accessToken: process.env.FYERS_ACCESS_TOKEN || ''
+  dhanClientId: process.env.DHAN_CLIENT_ID || '',
+  dhanAccessToken: process.env.DHAN_ACCESS_TOKEN || '',
+  dhanBaseUrl: process.env.DHAN_BASE_URL || 'https://api.dhan.co/v2',
+  dhanExchangeSegment: process.env.DHAN_EXCHANGE_SEGMENT || 'NSE_EQ',
+  dhanProductType: process.env.DHAN_PRODUCT_TYPE || 'INTRADAY',
+  dhanSecurityIds: JSON.parse(process.env.DHAN_SECURITY_IDS || '{}')
 };
 const db = new Database(process.env.DATABASE_FILE || 'trader.db');
 db.pragma('journal_mode = WAL');
@@ -30,25 +35,23 @@ const now = () => new Date().toISOString();
 const addEvent = (eventType, message, level = 'info', symbol = null) => db.prepare('INSERT INTO events (level,event_type,message,symbol,created_at) VALUES (?,?,?,?,?)').run(level, eventType, message, symbol, now());
 
 async function quote(symbol) {
-  if (!settings.clientId || !settings.accessToken) return { symbol, ltp: 100, source: 'demo' };
-  const response = await fetch(`https://api-t1.fyers.in/api/v3/quotes?symbols=${encodeURIComponent(symbol)}`, { headers: { Authorization: `${settings.clientId}:${settings.accessToken}` } });
-  if (!response.ok) throw new Error(`FYERS quote failed (${response.status})`);
+  if (settings.marketDataMode === 'demo') return { symbol, ltp: 100, source: 'demo' };
+  const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=15m&range=1d`, { headers: { 'User-Agent': 'SignalDesk/1.0' } });
+  if (!response.ok) throw new Error(`Yahoo quote failed (${response.status})`);
   const data = await response.json();
-  return { symbol, ltp: Number(data.d?.[0]?.v?.lp || 0), source: 'fyers' };
+  const meta = data.chart?.result?.[0]?.meta;
+  return { symbol, ltp: Number(meta?.regularMarketPrice || meta?.previousClose || 0), source: 'yahoo' };
 }
 
 async function history(symbol) {
   const candleCount = 120;
-  if (!settings.clientId || !settings.accessToken) {
-    return Array.from({ length: candleCount }, (_, index) => ({ close: 100 + Math.sin(index / 8) * 2 + index * 0.01 }));
-  }
-  const to = Math.floor(Date.now() / 1000);
-  const from = to - (candleCount * 15 * 60);
-  const params = new URLSearchParams({ symbol, resolution: '15', date_format: '0', range_from: String(from), range_to: String(to), cont_flag: '1' });
-  const response = await fetch(`https://api-t1.fyers.in/data/history?${params}`, { headers: { Authorization: `${settings.clientId}:${settings.accessToken}` } });
-  if (!response.ok) throw new Error(`FYERS history failed (${response.status})`);
+  if (settings.marketDataMode === 'demo') return Array.from({ length: candleCount }, (_, index) => ({ close: 100 + Math.sin(index / 8) * 2 + index * 0.01 }));
+  const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=15m&range=5d`, { headers: { 'User-Agent': 'SignalDesk/1.0' } });
+  if (!response.ok) throw new Error(`Yahoo history failed (${response.status})`);
   const data = await response.json();
-  return (data.candles || []).map((candle) => ({ timestamp: candle[0], open: candle[1], high: candle[2], low: candle[3], close: candle[4], volume: candle[5] }));
+  const result = data.chart?.result?.[0];
+  const quoteData = result?.indicators?.quote?.[0] || {};
+  return (result?.timestamp || []).map((timestamp, index) => ({ timestamp, open: quoteData.open?.[index], high: quoteData.high?.[index], low: quoteData.low?.[index], close: quoteData.close?.[index], volume: quoteData.volume?.[index] })).filter((candle) => Number.isFinite(candle.close)).slice(-candleCount);
 }
 
 async function decide(symbol, marketQuote, indicators) {
@@ -59,9 +62,11 @@ async function decide(symbol, marketQuote, indicators) {
 }
 
 async function placeOrder(symbol, side, quantity) {
-  if (!settings.clientId || !settings.accessToken) throw new Error('FYERS credentials are not configured');
-  const response = await fetch('https://api-t1.fyers.in/api/v3/orders/sync', { method: 'POST', headers: { Authorization: `${settings.clientId}:${settings.accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol, qty: quantity, type: 2, side: side === 'BUY' ? 1 : -1, productType: 'INTRADAY', limitPrice: 0, stopPrice: 0, validity: 'DAY', offlineOrder: false }) });
-  if (!response.ok) throw new Error(`FYERS order failed (${response.status})`);
+  if (!settings.dhanClientId || !settings.dhanAccessToken) throw new Error('Dhan credentials are not configured');
+  const securityId = settings.dhanSecurityIds[symbol];
+  if (!securityId) throw new Error(`No Dhan securityId mapping configured for ${symbol}`);
+  const response = await fetch(`${settings.dhanBaseUrl}/orders`, { method: 'POST', headers: { 'access-token': settings.dhanAccessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ dhanClientId: settings.dhanClientId, correlationId: `signaldesk-${Date.now()}`.slice(0, 30), transactionType: side, exchangeSegment: settings.dhanExchangeSegment, productType: settings.dhanProductType, orderType: 'MARKET', validity: 'DAY', securityId: String(securityId), quantity, price: 0, afterMarketOrder: false }) });
+  if (!response.ok) throw new Error(`Dhan order failed (${response.status}): ${await response.text()}`);
   return response.json();
 }
 
@@ -78,7 +83,7 @@ async function runCycle() {
       addEvent('decision', `${action} signal at ${(confidence * 100).toFixed(0)}%: ${decision.reason || ''} | RSI ${indicators.rsi14?.toFixed(1) ?? 'n/a'} | ${indicators.trend}`, 'info', symbol);
       if (!['BUY', 'SELL'].includes(action) || quantity <= 0 || confidence < settings.minConfidence) continue;
       let orderId = `paper-${randomUUID()}`; let status = 'simulated'; let source = 'paper';
-      if (settings.mode === 'live') { const result = await placeOrder(symbol, action, quantity); orderId = String(result.id || result.orderId || 'unknown'); status = 'submitted'; source = 'fyers'; }
+      if (settings.mode === 'live') { const result = await placeOrder(symbol, action, quantity); orderId = String(result.id || result.orderId || 'unknown'); status = 'submitted'; source = 'dhan'; }
       db.prepare('INSERT INTO trades (symbol,side,quantity,price,status,broker_order_id,source,reason,confidence,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(symbol, action, quantity, marketQuote.ltp, status, orderId, source, String(decision.reason || ''), confidence, now());
       addEvent('order', `${source} ${action} ${quantity} @ ${marketQuote.ltp}`, 'info', symbol);
     } catch (error) { addEvent('error', error.message, 'error', symbol); }

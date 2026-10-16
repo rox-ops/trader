@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.PORT = '8123';
+process.env.MARKET_DATA_MODE = 'demo';
 const { app, db, state } = await import('../server.js');
 const { calculateIndicators } = await import('../technicalIndicators.js');
 const server = app.listen(8123);
